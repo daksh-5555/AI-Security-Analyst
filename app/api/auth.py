@@ -38,7 +38,6 @@ from app.api.auth_cookies import (
     require_csrf,
     set_auth_cookies,
 )
-
 from app.api.constants import (
     AUTH_INTERNAL_ERROR_DETAIL,
     AUTH_INVALID_CREDENTIALS_DETAIL,
@@ -470,7 +469,7 @@ def refresh(
     request: Request,
     response: Response,
     db: DbSession,
-    payload: RefreshRequest | None = Body(default=None),
+    payload: Annotated[RefreshRequest | None, Body()] = None,
 ) -> RefreshResponse:
     """Rotate a refresh token and return a replacement token pair.
 

@@ -148,7 +148,8 @@ functions so FastAPI runs them in its threadpool instead of on the event loop.
 | Quality | pytest, httpx (ASGI test client), Ruff (lint and format) |
 
 Optional extras: the official `anthropic` SDK (`pip install ".[ai]"`) for
-advisory explanations (M9); `psycopg` 3 (`.[postgres]`) for PostgreSQL (M13,
+advisory explanations (M9), which also drives the DeepSeek provider via its
+Anthropic-compatible endpoint (ADR-0020); `psycopg` 3 (`.[postgres]`) for PostgreSQL (M13,
 verified on PostgreSQL 16); and `langgraph` (`.[orchestration]`) for the
 LangGraph workflow engine (M14, verified on langgraph 0.2.76). Not used: FAISS,
 React, Docker.
@@ -467,7 +468,8 @@ credentials. `APP_ENV` is required (`development`, `test`, `staging`, `productio
 | `ANALYSIS_ASYNC_ENABLED` | `false` | Allow `?mode=async` (needs a running worker) |
 | `ANALYSIS_WORKER_MAX_ATTEMPTS` / `_MAX_RUNNING` / `_POLL_INTERVAL_SECONDS` | `3` / `2` / `2` | Worker retries, deployment-wide running cap, idle poll |
 | `LLM_EXPLANATIONS_ENABLED` / `LLM_API_KEY` | `false` / unset | Advisory explanations; the key is required in staging/production when enabled |
-| `LLM_MODEL` / `LLM_EFFORT` / `LLM_REFUSAL_FALLBACK` | `claude-opus-5-5` / `medium` / `true` | Provider model, reasoning effort, server-side refusal fallback |
+| `LLM_PROVIDER` / `LLM_BASE_URL` | `anthropic` / unset | `anthropic` or `deepseek`; `deepseek` reuses the `anthropic` SDK against its Anthropic-compatible endpoint `https://api.deepseek.com/anthropic` (ADR-0020) and requires `LLM_BASE_URL` |
+| `LLM_MODEL` / `LLM_EFFORT` / `LLM_REFUSAL_FALLBACK` | `claude-opus-5-5` / `medium` / `true` | Provider model (use `deepseek-flash` for DeepSeek); reasoning effort and server-side refusal fallback apply to Anthropic only |
 | `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `60` / `2` | Per attempt; wall clock up to timeout × (retries + 1) |
 | `LLM_MAX_OUTPUT_TOKENS` / `LLM_ASSESSMENT_TOKEN_BUDGET` | `16000` / `500000` | Per-finding output cap; per-assessment total |
 | `LLM_MAX_PROMPT_CHARS` / `LLM_MAX_EVIDENCE_ITEMS` / `LLM_MAX_RESPONSE_CHARS` | `24000` / `10` / `40000` | Input and output size bounds |

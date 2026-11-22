@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -9,6 +10,12 @@ MIN_JWT_SECRET_BYTES = 32
 MIN_FINGERPRINT_KEY_BYTES = 32
 _RULE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.\-]{1,99}$")
 _BROAD_GLOBS = frozenset({"*", "**", "**/*", "*/**", "./**", "**/**"})
+
+# The automated test suite sets APP_ENV=test before any app module is imported
+# (see tests/conftest.py). In that mode the local developer ``.env`` is ignored so
+# the suite never depends on developer-specific values (e.g. a demo
+# AUTH_COOKIE_SECURE=false); every other environment loads ``.env`` as usual.
+_ENV_FILE: str | None = None if os.environ.get("APP_ENV") == "test" else ".env"
 
 
 class SecretAllowlistEntry(BaseModel):
@@ -80,7 +87,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables and `.env`."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
         hide_input_in_errors=True,
@@ -1026,15 +1033,32 @@ class Settings(BaseSettings):
             "deterministic pipeline never depends on it."
         ),
     )
-    llm_provider: Literal["anthropic"] = Field(
+    llm_provider: Literal["anthropic", "deepseek"] = Field(
         default="anthropic",
-        description="Explanation provider adapter (needs the optional [ai] extra).",
+        description=(
+            "Explanation provider adapter (needs the optional [ai] extra). 'anthropic' "
+            "calls Anthropic's API with native structured output; 'deepseek' reuses the "
+            "same SDK against DeepSeek's Anthropic-compatible endpoint (set LLM_BASE_URL "
+            "and LLM_MODEL=deepseek-flash)."
+        ),
     )
     llm_model: str = Field(
         default="claude-opus-5-5",
         min_length=1,
         max_length=100,
-        description="Provider model identifier used for explanations.",
+        description=(
+            "Provider model identifier used for explanations. Use 'deepseek-flash' when "
+            "LLM_PROVIDER=deepseek."
+        ),
+    )
+    llm_base_url: str | None = Field(
+        default=None,
+        max_length=2000,
+        description=(
+            "Base URL for the provider API. Leave unset for Anthropic (the SDK default). "
+            "Required for DeepSeek: 'https://api.deepseek.com/anthropic' (its "
+            "Anthropic-compatible endpoint). Never derived from analysed content."
+        ),
     )
     llm_api_key: SecretStr | None = Field(
         default=None,
@@ -1212,6 +1236,15 @@ def _validate_explicit_deployment_settings(target: Settings) -> None:
         raise SecurityConfigurationError(
             "LLM_API_KEY must be configured when LLM_EXPLANATIONS_ENABLED is true in "
             "staging or production."
+        )
+    if (
+        target.llm_explanations_enabled
+        and target.llm_provider == "deepseek"
+        and not (target.llm_base_url or "").strip()
+    ):
+        raise SecurityConfigurationError(
+            "LLM_BASE_URL must be configured when LLM_PROVIDER=deepseek and "
+            "LLM_EXPLANATIONS_ENABLED is true in staging or production."
         )
     if target.evidence_fingerprint_key is None:
         raise SecurityConfigurationError(

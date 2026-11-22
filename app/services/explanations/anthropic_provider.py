@@ -24,6 +24,7 @@ import importlib
 from types import ModuleType
 from typing import Any
 
+from app.services.explanations._sdk_support import invoke_messages, response_from_message
 from app.services.explanations.provider import (
     ProviderError,
     ProviderErrorCode,
@@ -90,51 +91,15 @@ class AnthropicExplanationProvider:
                 "format": {"type": "json_schema", "schema": request.json_schema},
             },
         }
-        # Most specific first: APITimeoutError subclasses APIConnectionError,
-        # and the status errors subclass APIStatusError.
-        try:
+        def _call() -> Any:
             if self._refusal_fallback:
-                response = client.beta.messages.create(
+                return client.beta.messages.create(
                     **kwargs, betas=[FALLBACK_BETA], fallbacks="default"
                 )
-            else:
-                response = client.messages.create(**kwargs)
-        except sdk.APITimeoutError as exc:
-            raise ProviderError(ProviderErrorCode.TIMEOUT) from exc
-        except sdk.RateLimitError as exc:
-            raise ProviderError(ProviderErrorCode.RATE_LIMITED) from exc
-        except (sdk.AuthenticationError, sdk.PermissionDeniedError) as exc:
-            raise ProviderError(ProviderErrorCode.NOT_CONFIGURED) from exc
-        except sdk.BadRequestError as exc:
-            raise ProviderError(ProviderErrorCode.BAD_REQUEST) from exc
-        except sdk.APIStatusError as exc:
-            raise ProviderError(ProviderErrorCode.UNAVAILABLE) from exc
-        except sdk.APIConnectionError as exc:
-            raise ProviderError(ProviderErrorCode.UNAVAILABLE) from exc
+            return client.messages.create(**kwargs)
 
-        usage = getattr(response, "usage", None)
-        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-        stop_reason = getattr(response, "stop_reason", None)
-        if stop_reason == "refusal":
-            raise ProviderError(
-                ProviderErrorCode.REFUSED, input_tokens=input_tokens, output_tokens=output_tokens
-            )
-        if stop_reason == "max_tokens":
-            raise ProviderError(
-                ProviderErrorCode.TRUNCATED, input_tokens=input_tokens, output_tokens=output_tokens
-            )
-        # Thinking blocks may precede the answer; the structured output is text.
-        text = next(
-            (block.text for block in response.content if getattr(block, "type", None) == "text"),
-            "",
-        )
-        return ProviderResponse(
-            text=text,
-            model=str(getattr(response, "model", None) or self.model)[:100],
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+        response = invoke_messages(sdk, _call)
+        return response_from_message(response, self.model)
 
 
 __all__ = ["AnthropicExplanationProvider", "FALLBACK_BETA"]

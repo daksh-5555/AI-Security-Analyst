@@ -62,13 +62,31 @@ class ExplanationProvider(Protocol):
 
 
 def build_provider(config: Settings | None = None) -> ExplanationProvider:
-    """The configured provider. The SDK is imported only when a call is made."""
+    """The configured provider. The SDK is imported only when a call is made.
+
+    Selection is centralized here (and therefore testable). Both providers use the
+    same ``anthropic`` SDK; DeepSeek targets its Anthropic-compatible endpoint via
+    ``llm_base_url``.
+    """
     target = config or settings
+    api_key = target.llm_api_key.get_secret_value() if target.llm_api_key else None
+
+    if target.llm_provider == "deepseek":
+        from app.services.explanations.deepseek_provider import DeepSeekExplanationProvider
+
+        return DeepSeekExplanationProvider(
+            model=target.llm_model,
+            api_key=api_key,
+            base_url=target.llm_base_url,
+            timeout_seconds=target.llm_timeout_seconds,
+            max_retries=target.llm_max_retries,
+        )
+
     from app.services.explanations.anthropic_provider import AnthropicExplanationProvider
 
     return AnthropicExplanationProvider(
         model=target.llm_model,
-        api_key=target.llm_api_key.get_secret_value() if target.llm_api_key else None,
+        api_key=api_key,
         timeout_seconds=target.llm_timeout_seconds,
         max_retries=target.llm_max_retries,
         effort=target.llm_effort,
