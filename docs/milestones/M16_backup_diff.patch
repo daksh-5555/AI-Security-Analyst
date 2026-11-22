@@ -1,0 +1,624 @@
+diff -ruN app/api/auth.py /Users/dakshkumar/Desktop/Vulnerability_backend-main/app/api/auth.py
+--- app/api/auth.py	2026-11-19 20:36:18
++++ /Users/dakshkumar/Desktop/Vulnerability_backend-main/app/api/auth.py	2026-11-19 20:29:03
+@@ -22,6 +22,7 @@
+ from fastapi import (
+     APIRouter,
+     BackgroundTasks,
++    Body,
+     Depends,
+     HTTPException,
+     Request,
+@@ -30,6 +31,14 @@
+ )
+ from sqlalchemy.orm import Session
+ 
++from app.api.auth_cookies import (
++    clear_auth_cookies,
++    generate_csrf_token,
++    read_refresh_cookie,
++    require_csrf,
++    set_auth_cookies,
++)
++
+ from app.api.constants import (
+     AUTH_INTERNAL_ERROR_DETAIL,
+     AUTH_INVALID_CREDENTIALS_DETAIL,
+@@ -398,6 +407,7 @@
+ def login(
+     _rate_limit: RateLimited,
+     request: Request,
++    response: Response,
+     payload: LoginRequest,
+     db: DbSession,
+ ) -> LoginResponse:
+@@ -431,11 +441,20 @@
+         ) from None
+ 
+     login_failure_limiter.clear(LOGIN_FAILURE_PAIR_SCOPE, f"{account_key}|{client}")
++    if settings.auth_refresh_cookie_enabled:
++        set_auth_cookies(
++            response,
++            refresh_token=result.refresh_token,
++            max_age_seconds=result.refresh_expires_in,
++            csrf_token=generate_csrf_token(),
++        )
+     return LoginResponse(
+         access_token=result.access_token,
+         token_type="bearer",
+         expires_in=result.expires_in,
+-        refresh_token=result.refresh_token,
++        refresh_token=(
++            result.refresh_token if settings.auth_refresh_in_response_body else ""
++        ),
+         refresh_expires_in=result.refresh_expires_in,
+         session_id=result.session_id,
+     )
+@@ -448,20 +467,43 @@
+ )
+ def refresh(
+     _rate_limit: RateLimited,
+-    payload: RefreshRequest,
++    request: Request,
++    response: Response,
+     db: DbSession,
++    payload: RefreshRequest | None = Body(default=None),
+ ) -> RefreshResponse:
+     """Rotate a refresh token and return a replacement token pair.
+ 
++    The token may arrive in the request body (the existing API contract) or, for a
++    browser client, in the HttpOnly refresh cookie. An explicit body token always
++    wins. A cookie-sourced request additionally requires a valid double-submit CSRF
++    token; a body-sourced request does not, because an attacker who cannot read the
++    token cannot place it in the body, so that path is not a CSRF vector.
++
+     Unknown, malformed, expired, revoked, and replayed tokens all return the same
+     generic ``401`` so callers cannot distinguish their state. Replaying a consumed
+     token also revokes the entire session family. The session identifier stays
+     stable across rotations.
+     """
++    body_token = payload.refresh_token if payload is not None else None
++    if body_token:
++        presented_token = body_token
++    else:
++        presented_token = read_refresh_cookie(request)
++        if presented_token is not None:
++            # Only the cookie path is a CSRF vector; enforce the check before any
++            # rotation work runs.
++            require_csrf(request)
++    if not presented_token:
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail=AUTH_INVALID_REFRESH_TOKEN_DETAIL,
++        )
++
+     try:
+         result = refresh_tokens.rotate(
+             db,
+-            presented_token=payload.refresh_token,
++            presented_token=presented_token,
+         )
+     except InvalidRefreshTokenError:
+         raise HTTPException(
+@@ -475,11 +517,20 @@
+             detail=AUTH_INTERNAL_ERROR_DETAIL,
+         ) from None
+ 
++    if settings.auth_refresh_cookie_enabled:
++        set_auth_cookies(
++            response,
++            refresh_token=result.refresh_token,
++            max_age_seconds=result.refresh_expires_in,
++            csrf_token=generate_csrf_token(),
++        )
+     return RefreshResponse(
+         access_token=result.access_token,
+         token_type="bearer",
+         expires_in=result.expires_in,
+-        refresh_token=result.refresh_token,
++        refresh_token=(
++            result.refresh_token if settings.auth_refresh_in_response_body else ""
++        ),
+         refresh_expires_in=result.refresh_expires_in,
+         session_id=result.session_id,
+     )
+@@ -527,4 +578,9 @@
+             detail=AUTH_INTERNAL_ERROR_DETAIL,
+         ) from None
+ 
+-    return Response(status_code=status.HTTP_204_NO_CONTENT)
++    # Logout already requires the Bearer access token, so it is inherently
++    # CSRF-safe; only the stale refresh cookie needs clearing here.
++    result = Response(status_code=status.HTTP_204_NO_CONTENT)
++    if settings.auth_refresh_cookie_enabled:
++        clear_auth_cookies(result)
++    return result
+diff -ruN app/api/auth_cookies.py /Users/dakshkumar/Desktop/Vulnerability_backend-main/app/api/auth_cookies.py
+--- app/api/auth_cookies.py	1970-01-01 05:30:00
++++ /Users/dakshkumar/Desktop/Vulnerability_backend-main/app/api/auth_cookies.py	2026-11-19 20:28:25
+@@ -0,0 +1,117 @@
++"""Transport helpers for the optional browser refresh-cookie flow.
++
++The deterministic API authenticates with ``Authorization: Bearer`` headers and is
++therefore immune to CSRF: a cross-site page cannot make the browser attach that
++header. The only cookie-bearing surface is the refresh endpoint, and only when a
++caller presents the refresh token via the HttpOnly cookie instead of the request
++body. That path is guarded here by a stateless double-submit CSRF check.
++
++Nothing in this module persists state or touches the database. Cookies are pure
++transport: the refresh token's hash is still the only server-side record, exactly
++as in the header-bearer flow.
++"""
++
++from __future__ import annotations
++
++import secrets
++
++from fastapi import HTTPException, Request, Response, status
++
++from app.core.config import settings
++
++# Both cookies are scoped to the auth router prefix so they are only ever attached
++# to the three endpoints that read them, never to the rest of the API surface.
++AUTH_COOKIE_PATH = "/api/v1/auth"
++
++CSRF_HEADER_NAME = "X-CSRF-Token"
++
++# Generic, non-enumerating message. A failed double-submit check never reveals
++# whether the cookie, the header, or neither was the problem.
++CSRF_FAILED_DETAIL = "Request could not be validated."
++
++
++def generate_csrf_token() -> str:
++    """Return a fresh, unguessable CSRF value for the double-submit cookie."""
++    return secrets.token_urlsafe(32)
++
++
++def set_auth_cookies(
++    response: Response,
++    *,
++    refresh_token: str,
++    max_age_seconds: int,
++    csrf_token: str,
++) -> None:
++    """Attach the HttpOnly refresh cookie and the readable CSRF cookie.
++
++    The refresh cookie is HttpOnly so JavaScript can never read it; the CSRF
++    cookie is deliberately readable so the single-page app can echo it in the
++    ``X-CSRF-Token`` header. Both carry the configured Secure/SameSite/Domain
++    attributes and the same lifetime as the refresh token.
++    """
++    response.set_cookie(
++        key=settings.auth_refresh_cookie_name,
++        value=refresh_token,
++        max_age=max_age_seconds,
++        path=AUTH_COOKIE_PATH,
++        domain=settings.auth_cookie_domain,
++        secure=settings.auth_cookie_secure,
++        httponly=True,
++        samesite=settings.auth_cookie_samesite,
++    )
++    response.set_cookie(
++        key=settings.auth_csrf_cookie_name,
++        value=csrf_token,
++        max_age=max_age_seconds,
++        path=AUTH_COOKIE_PATH,
++        domain=settings.auth_cookie_domain,
++        secure=settings.auth_cookie_secure,
++        httponly=False,
++        samesite=settings.auth_cookie_samesite,
++    )
++
++
++def clear_auth_cookies(response: Response) -> None:
++    """Expire both auth cookies on logout.
++
++    The delete must echo the Path and Domain the cookies were set with, otherwise
++    the browser keeps the original cookie.
++    """
++    response.delete_cookie(
++        key=settings.auth_refresh_cookie_name,
++        path=AUTH_COOKIE_PATH,
++        domain=settings.auth_cookie_domain,
++    )
++    response.delete_cookie(
++        key=settings.auth_csrf_cookie_name,
++        path=AUTH_COOKIE_PATH,
++        domain=settings.auth_cookie_domain,
++    )
++
++
++def read_refresh_cookie(request: Request) -> str | None:
++    """Return the refresh token carried in the HttpOnly cookie, if present."""
++    if not settings.auth_refresh_cookie_enabled:
++        return None
++    return request.cookies.get(settings.auth_refresh_cookie_name)
++
++
++def require_csrf(request: Request) -> None:
++    """Enforce the double-submit CSRF check for a cookie-sourced request.
++
++    The readable CSRF cookie and the ``X-CSRF-Token`` header must both be present
++    and equal. A cross-site attacker can neither read the cookie (it is on the
++    target's origin) nor set the custom header (no CORS permits it), so a forged
++    refresh cannot satisfy both. Comparison is constant-time.
++    """
++    cookie_value = request.cookies.get(settings.auth_csrf_cookie_name)
++    header_value = request.headers.get(CSRF_HEADER_NAME)
++    if (
++        not cookie_value
++        or not header_value
++        or not secrets.compare_digest(cookie_value, header_value)
++    ):
++        raise HTTPException(
++            status_code=status.HTTP_403_FORBIDDEN,
++            detail=CSRF_FAILED_DETAIL,
++        )
+diff -ruN app/core/config.py /Users/dakshkumar/Desktop/Vulnerability_backend-main/app/core/config.py
+--- app/core/config.py	2026-11-19 20:36:18
++++ /Users/dakshkumar/Desktop/Vulnerability_backend-main/app/core/config.py	2026-11-19 20:27:55
+@@ -414,6 +414,63 @@
+             "cannot be abused to lock an account out."
+         ),
+     )
++    auth_refresh_cookie_enabled: bool = Field(
++        default=True,
++        description=(
++            "Also deliver the rotated refresh token as an HttpOnly cookie on login and "
++            "refresh, and accept it from that cookie on refresh and logout. Additive: "
++            "the header-bearer flow and the body refresh token are unaffected. Lets a "
++            "browser single-page app keep the access token in memory and never expose "
++            "the refresh token to JavaScript."
++        ),
++    )
++    auth_refresh_in_response_body: bool = Field(
++        default=True,
++        description=(
++            "Keep returning the refresh token in the login and refresh JSON body. True "
++            "preserves the existing API contract (and the test suite). A browser app "
++            "that relies on the refresh cookie sets this false so the refresh token is "
++            "never placed where JavaScript can read it."
++        ),
++    )
++    auth_cookie_secure: bool = Field(
++        default=True,
++        description=(
++            "Set the Secure attribute on the refresh and CSRF cookies. Required in "
++            "staging and production. Only set false for a local same-origin http dev "
++            "proxy, where the browser would otherwise refuse to return a Secure cookie."
++        ),
++    )
++    auth_cookie_samesite: Literal["strict", "lax"] = Field(
++        default="strict",
++        description=(
++            "SameSite attribute for the refresh and CSRF cookies. 'strict' is the safe "
++            "default for a same-origin app; 'lax' only if a cross-site top-level flow "
++            "must carry the cookie. 'none' is intentionally not permitted."
++        ),
++    )
++    auth_cookie_domain: str | None = Field(
++        default=None,
++        description=(
++            "Explicit Domain attribute for the refresh and CSRF cookies. Default (unset) "
++            "scopes them to the exact response host, which is preferred."
++        ),
++    )
++    auth_refresh_cookie_name: str = Field(
++        default="aisa_refresh",
++        min_length=1,
++        max_length=64,
++        description="Name of the HttpOnly refresh-token cookie.",
++    )
++    auth_csrf_cookie_name: str = Field(
++        default="aisa_csrf",
++        min_length=1,
++        max_length=64,
++        description=(
++            "Name of the readable double-submit CSRF cookie that guards cookie-sourced "
++            "refresh requests. The client echoes its value in the X-CSRF-Token header."
++        ),
++    )
+     audit_unauthenticated_denials_per_client: int = Field(
+         default=20,
+         ge=1,
+@@ -1145,6 +1202,11 @@
+         raise SecurityConfigurationError(
+             "WEB_AUTH_LAB_ENABLED must be false when APP_ENV is staging or production; "
+             "authenticated lab targets are for development labs only."
++        )
++    if target.auth_refresh_cookie_enabled and not target.auth_cookie_secure:
++        raise SecurityConfigurationError(
++            "AUTH_COOKIE_SECURE must be true when AUTH_REFRESH_COOKIE_ENABLED is true in "
++            "staging or production; a non-Secure refresh cookie is only for local dev."
+         )
+     if target.llm_explanations_enabled and target.llm_api_key is None:
+         raise SecurityConfigurationError(
+diff -ruN app/schemas/auth.py /Users/dakshkumar/Desktop/Vulnerability_backend-main/app/schemas/auth.py
+--- app/schemas/auth.py	2026-11-19 20:36:18
++++ /Users/dakshkumar/Desktop/Vulnerability_backend-main/app/schemas/auth.py	2026-11-19 20:28:06
+@@ -149,15 +149,21 @@
+     """Payload for rotating a refresh token.
+ 
+     The token is deliberately not format-validated beyond its size so malformed
+-    values reach the same generic rejection path as unknown tokens.
++    values reach the same generic rejection path as unknown tokens. It is optional:
++    a browser client may omit it and present the refresh token via the HttpOnly
++    cookie instead (guarded by a double-submit CSRF check). An explicit body token
++    always takes precedence over the cookie.
+     """
+ 
+     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+ 
+-    refresh_token: str = Field(
+-        min_length=1,
++    refresh_token: str | None = Field(
++        default=None,
+         max_length=MAX_OPAQUE_TOKEN_LENGTH,
+-        description="Opaque refresh token issued by login or a previous rotation.",
++        description=(
++            "Opaque refresh token issued by login or a previous rotation. Omit it to "
++            "present the token via the HttpOnly refresh cookie instead."
++        ),
+     )
+ 
+ 
+diff -ruN tests/test_auth_refresh_cookie.py /Users/dakshkumar/Desktop/Vulnerability_backend-main/tests/test_auth_refresh_cookie.py
+--- tests/test_auth_refresh_cookie.py	1970-01-01 05:30:00
++++ /Users/dakshkumar/Desktop/Vulnerability_backend-main/tests/test_auth_refresh_cookie.py	2026-11-19 20:30:52
+@@ -0,0 +1,215 @@
++"""Browser refresh-cookie flow: HttpOnly cookie delivery, double-submit CSRF, and
++backward compatibility with the existing header/body refresh contract.
++
++Every test here is offline and deterministic. ``auth_cookie_secure`` is turned off
++for the round-trip tests because the ASGI transport speaks plain http, and a
++browser cookie jar refuses to return a Secure cookie over http — exactly the
++reason the setting exists for local same-origin dev. The attribute assertions run
++with the secure default so the production cookie shape is what is checked.
++"""
++
++from __future__ import annotations
++
++import httpx
++import pytest
++from auth_helpers import DEFAULT_PASSWORD, create_user
++from sqlalchemy.orm import Session, sessionmaker
++
++from app.core.config import settings
++
++pytestmark = pytest.mark.usefixtures("low_cost_argon2", "configure_jwt")
++
++LOGIN_URL = "/api/v1/auth/login"
++REFRESH_URL = "/api/v1/auth/refresh"
++LOGOUT_URL = "/api/v1/auth/logout"
++GENERIC_REFRESH_DETAIL = "Invalid or expired refresh token"
++
++
++def _set_cookie_header(response: httpx.Response, name: str) -> str | None:
++    for raw in response.headers.get_list("set-cookie"):
++        if raw.startswith(f"{name}="):
++            return raw
++    return None
++
++
++async def _login(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    *,
++    email: str = "cookie@example.com",
++) -> httpx.Response:
++    create_user(session_factory, email=email, is_email_verified=True)
++    response = await client.post(
++        LOGIN_URL,
++        json={"email": email, "password": DEFAULT_PASSWORD},
++    )
++    assert response.status_code == 200
++    return response
++
++
++@pytest.mark.anyio
++async def test_login_sets_httponly_refresh_and_readable_csrf_cookies(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++) -> None:
++    response = await _login(client, session_factory)
++
++    refresh_cookie = _set_cookie_header(response, settings.auth_refresh_cookie_name)
++    csrf_cookie = _set_cookie_header(response, settings.auth_csrf_cookie_name)
++    assert refresh_cookie is not None and csrf_cookie is not None
++
++    # Refresh cookie: HttpOnly, Secure (default), SameSite=strict, auth-scoped path.
++    assert "HttpOnly" in refresh_cookie
++    assert "Secure" in refresh_cookie
++    assert "SameSite=strict" in refresh_cookie
++    assert "Path=/api/v1/auth" in refresh_cookie
++
++    # CSRF cookie: deliberately readable (not HttpOnly) so the SPA can echo it.
++    assert "HttpOnly" not in csrf_cookie
++    assert "Path=/api/v1/auth" in csrf_cookie
++
++    # The body contract is unchanged by default.
++    assert response.json()["refresh_token"]
++
++
++@pytest.mark.anyio
++async def test_refresh_via_cookie_with_csrf_header_rotates(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setattr(settings, "auth_cookie_secure", False)
++    await _login(client, session_factory)
++    csrf = client.cookies.get(settings.auth_csrf_cookie_name)
++    assert csrf
++
++    response = await client.post(REFRESH_URL, headers={"X-CSRF-Token": csrf})
++
++    assert response.status_code == 200
++    assert response.json()["access_token"]
++
++
++@pytest.mark.anyio
++async def test_refresh_via_cookie_without_csrf_header_is_forbidden(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setattr(settings, "auth_cookie_secure", False)
++    await _login(client, session_factory)
++
++    response = await client.post(REFRESH_URL)
++
++    assert response.status_code == 403
++
++
++@pytest.mark.anyio
++async def test_refresh_via_cookie_with_wrong_csrf_header_is_forbidden(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setattr(settings, "auth_cookie_secure", False)
++    await _login(client, session_factory)
++
++    response = await client.post(REFRESH_URL, headers={"X-CSRF-Token": "not-the-value"})
++
++    assert response.status_code == 403
++
++
++@pytest.mark.anyio
++async def test_body_token_takes_precedence_and_skips_csrf(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    # Cookie and CSRF cookie are both present, but a body token must still work
++    # with no CSRF header: the body path is not a CSRF vector.
++    monkeypatch.setattr(settings, "auth_cookie_secure", False)
++    login = await _login(client, session_factory)
++    body_token = login.json()["refresh_token"]
++
++    response = await client.post(REFRESH_URL, json={"refresh_token": body_token})
++
++    assert response.status_code == 200
++    assert response.json()["access_token"]
++
++
++@pytest.mark.anyio
++async def test_refresh_without_token_or_cookie_is_unauthorized(
++    client: httpx.AsyncClient,
++) -> None:
++    # No login, so no cookie and no body token: the generic 401, never a 403.
++    response = await client.post(REFRESH_URL)
++
++    assert response.status_code == 401
++    assert response.json() == {"detail": GENERIC_REFRESH_DETAIL}
++
++
++@pytest.mark.anyio
++async def test_cookie_refresh_rotates_the_cookie_value(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setattr(settings, "auth_cookie_secure", False)
++    await _login(client, session_factory)
++    first = client.cookies.get(settings.auth_refresh_cookie_name)
++    csrf = client.cookies.get(settings.auth_csrf_cookie_name)
++
++    response = await client.post(REFRESH_URL, headers={"X-CSRF-Token": csrf})
++    assert response.status_code == 200
++
++    second = client.cookies.get(settings.auth_refresh_cookie_name)
++    assert first and second and second != first
++
++
++@pytest.mark.anyio
++async def test_logout_clears_the_auth_cookies(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setattr(settings, "auth_cookie_secure", False)
++    login = await _login(client, session_factory)
++    access_token = login.json()["access_token"]
++
++    response = await client.post(
++        LOGOUT_URL,
++        headers={"Authorization": f"Bearer {access_token}"},
++    )
++
++    assert response.status_code == 204
++    refresh_clear = _set_cookie_header(response, settings.auth_refresh_cookie_name)
++    csrf_clear = _set_cookie_header(response, settings.auth_csrf_cookie_name)
++    assert refresh_clear is not None and csrf_clear is not None
++    # delete_cookie expires the value immediately.
++    assert "Max-Age=0" in refresh_clear or "01 Jan 1970" in refresh_clear
++
++
++@pytest.mark.anyio
++async def test_feature_disabled_sets_no_cookies(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setattr(settings, "auth_refresh_cookie_enabled", False)
++    response = await _login(client, session_factory)
++
++    assert _set_cookie_header(response, settings.auth_refresh_cookie_name) is None
++    assert response.json()["refresh_token"]
++
++
++@pytest.mark.anyio
++async def test_body_token_suppressed_when_configured(
++    client: httpx.AsyncClient,
++    session_factory: sessionmaker[Session],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    # The browser app turns the body token off so JavaScript never receives it;
++    # the HttpOnly cookie is still delivered.
++    monkeypatch.setattr(settings, "auth_refresh_in_response_body", False)
++    response = await _login(client, session_factory)
++
++    assert response.json()["refresh_token"] == ""
++    assert _set_cookie_header(response, settings.auth_refresh_cookie_name) is not None
+diff -ruN tests/test_security_config.py /Users/dakshkumar/Desktop/Vulnerability_backend-main/tests/test_security_config.py
+--- tests/test_security_config.py	2026-11-19 20:36:18
++++ /Users/dakshkumar/Desktop/Vulnerability_backend-main/tests/test_security_config.py	2026-11-19 20:29:46
+@@ -410,6 +410,37 @@
+     validate_security_configuration(config)
+ 
+ 
++def test_production_rejects_non_secure_refresh_cookie() -> None:
++    config = Settings(
++        _env_file=None,
++        app_env="production",
++        jwt_secret=TEST_SECRET,
++        email_backend="smtp",
++        auth_refresh_cookie_enabled=True,
++        auth_cookie_secure=False,
++        **DEPLOYMENT_SETTINGS,
++    )
++
++    with pytest.raises(SecurityConfigurationError) as exc_info:
++        validate_security_configuration(config)
++
++    assert "AUTH_COOKIE_SECURE" in str(exc_info.value)
++
++
++def test_production_allows_non_secure_cookie_when_feature_disabled() -> None:
++    config = Settings(
++        _env_file=None,
++        app_env="production",
++        jwt_secret=TEST_SECRET,
++        email_backend="smtp",
++        auth_refresh_cookie_enabled=False,
++        auth_cookie_secure=False,
++        **DEPLOYMENT_SETTINGS,
++    )
++
++    validate_security_configuration(config)
++
++
+ @pytest.mark.parametrize("app_env", ["staging", "production"])
+ @pytest.mark.parametrize(
+     ("omitted", "env_name"),

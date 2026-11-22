@@ -1,0 +1,166 @@
+{
+  "knowledge_base": "ai-security-analyst-guidance",
+  "version": "2026.11.1",
+  "documents": [
+    {
+      "id": "sql-injection",
+      "file": "docs/sql-injection.md",
+      "title": "Preventing SQL injection",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["sqli", "input_to_database_*"],
+      "cwe_ids": ["CWE-89"],
+      "references": [
+        {"label": "OWASP SQL Injection Prevention Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html"},
+        {"label": "CWE-89", "url": "https://cwe.mitre.org/data/definitions/89.html"}
+      ]
+    },
+    {
+      "id": "cross-site-scripting",
+      "file": "docs/cross-site-scripting.md",
+      "title": "Preventing cross-site scripting",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["xss"],
+      "cwe_ids": ["CWE-79"],
+      "references": [
+        {"label": "OWASP Cross Site Scripting Prevention Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"},
+        {"label": "CWE-79", "url": "https://cwe.mitre.org/data/definitions/79.html"}
+      ]
+    },
+    {
+      "id": "hardcoded-secrets",
+      "file": "docs/hardcoded-secrets.md",
+      "title": "Removing credentials from source code",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["secret"],
+      "cwe_ids": ["CWE-798"],
+      "references": [
+        {"label": "OWASP Secrets Management Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html"},
+        {"label": "CWE-798", "url": "https://cwe.mitre.org/data/definitions/798.html"}
+      ]
+    },
+    {
+      "id": "vulnerable-dependencies",
+      "file": "docs/vulnerable-dependencies.md",
+      "title": "Fixing vulnerable dependencies",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 180,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["dependency"],
+      "cwe_ids": ["CWE-1395", "CWE-1104"],
+      "references": [
+        {"label": "OWASP Vulnerable Dependency Management Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Vulnerable_Dependency_Management_Cheat_Sheet.html"},
+        {"label": "CWE-1395", "url": "https://cwe.mitre.org/data/definitions/1395.html"}
+      ]
+    },
+    {
+      "id": "command-injection",
+      "file": "docs/command-injection.md",
+      "title": "Preventing OS command injection",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["input_to_process_execution"],
+      "cwe_ids": ["CWE-78"],
+      "references": [
+        {"label": "OWASP OS Command Injection Defense Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html"},
+        {"label": "CWE-78", "url": "https://cwe.mitre.org/data/definitions/78.html"}
+      ]
+    },
+    {
+      "id": "path-traversal-and-uploads",
+      "file": "docs/path-traversal-and-uploads.md",
+      "title": "Preventing path traversal and unsafe file handling",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["input_to_file_*"],
+      "cwe_ids": ["CWE-22", "CWE-434"],
+      "references": [
+        {"label": "OWASP Path Traversal", "url": "https://owasp.org/www-community/attacks/Path_Traversal"},
+        {"label": "OWASP File Upload Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html"},
+        {"label": "CWE-22", "url": "https://cwe.mitre.org/data/definitions/22.html"}
+      ]
+    },
+    {
+      "id": "unsafe-deserialization",
+      "file": "docs/unsafe-deserialization.md",
+      "title": "Avoiding unsafe deserialization",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["input_to_deserialization"],
+      "cwe_ids": ["CWE-502"],
+      "references": [
+        {"label": "OWASP Deserialization Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Deserialization_Cheat_Sheet.html"},
+        {"label": "CWE-502", "url": "https://cwe.mitre.org/data/definitions/502.html"}
+      ]
+    },
+    {
+      "id": "code-injection",
+      "file": "docs/code-injection.md",
+      "title": "Preventing dynamic code execution of untrusted input",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["input_to_dynamic_code_execution"],
+      "cwe_ids": ["CWE-94", "CWE-95"],
+      "references": [
+        {"label": "OWASP Code Injection", "url": "https://owasp.org/www-community/attacks/Code_Injection"},
+        {"label": "CWE-94", "url": "https://cwe.mitre.org/data/definitions/94.html"}
+      ]
+    },
+    {
+      "id": "archive-extraction",
+      "file": "docs/archive-extraction.md",
+      "title": "Extracting archives safely",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["input_to_archive_extraction"],
+      "cwe_ids": ["CWE-22", "CWE-409"],
+      "references": [
+        {"label": "CWE-22", "url": "https://cwe.mitre.org/data/definitions/22.html"},
+        {"label": "CWE-409", "url": "https://cwe.mitre.org/data/definitions/409.html"}
+      ]
+    },
+    {
+      "id": "verification-and-retest",
+      "file": "docs/verification-and-retest.md",
+      "title": "Verifying fixes and retesting findings",
+      "version": "1.0",
+      "updated_at": "2026-11-17",
+      "review_interval_days": 365,
+      "source_type": "project_guidance",
+      "license": "Project-maintained guidance; same license as this repository",
+      "categories": ["*"],
+      "cwe_ids": [],
+      "references": [
+        {"label": "OWASP Web Security Testing Guide", "url": "https://owasp.org/www-project-web-security-testing-guide/"}
+      ]
+    }
+  ]
+}
