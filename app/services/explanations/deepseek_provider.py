@@ -36,6 +36,12 @@ from app.services.explanations.provider import (
 _SCHEMA_INSTRUCTION = (
     "\n\nReturn a single JSON object and nothing else — no markdown, no code "
     "fences, no commentary. It must conform exactly to this JSON schema:\n{schema}"
+    "\n\nGrounding is mandatory and strictly checked: for every 'evidence_references' "
+    "entry and every 'evidence_ids' value, copy an 'id' value verbatim — character "
+    "for character — from the <finding_data> (or reference_material) block above. "
+    "Never invent, shorten, reformat, or alter an identifier, and never cite an id "
+    "that does not appear in the supplied data. If you are unsure an id is exact, "
+    "omit it rather than guess."
 )
 
 
